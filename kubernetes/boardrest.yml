@@ -20,7 +20,7 @@ spec:
           type: DirectoryOrCreate 
       containers:
       - name: boardrest
-        image: docker.io/redleon1/boardrest_boardnext:{{VERSION}}
+        image: docker.io/huahua10ve/boardrest_boardnext:{{VERSION}}
         imagePullPolicy: Always
         volumeMounts:
         - name: boardrest-data
