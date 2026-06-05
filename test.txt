@@ -16,3 +16,7 @@ rain
 weather
 
 good
+
+bad
+
+bad
