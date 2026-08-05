@@ -35,20 +35,20 @@ pipeline {
         }
         stage("Docker Image Build") {
             steps {
-                sh "docker build --no-cache -t redleon1/apache_boardnext:${BUILD_NUMBER} ./docker/apache2/"
-                sh "docker build --no-cache -t redleon1/boardrest_boardnext:${BUILD_NUMBER} ./docker/boardrest/"
+                sh "docker build --no-cache -t redleon1/apache-boardnext:${BUILD_NUMBER} ./docker/apache2/"
+                sh "docker build --no-cache -t redleon1/boardrest-boardnext:${BUILD_NUMBER} ./docker/boardrest/"
             }
         }
         stage("Docker Image Push") {
             steps {
-                sh "docker push redleon1/apache_boardnext:${BUILD_NUMBER}"
-                sh "docker push redleon1/boardrest_boardnext:${BUILD_NUMBER}"
+                sh "docker push redleon1/apache-boardnext:${BUILD_NUMBER}"
+                sh "docker push redleon1/boardrest-boardnext:${BUILD_NUMBER}"
             }
         }
         stage("Docker Image Clean up") {
             steps {
-                sh "docker image rm redleon1/apache_boardnext:${BUILD_NUMBER}"
-                sh "docker image rm redleon1/boardrest_boardnext:${BUILD_NUMBER}"
+                sh "docker image rm redleon1/apache-boardnext:${BUILD_NUMBER}"
+                sh "docker image rm redleon1/boardrest-boardnext:${BUILD_NUMBER}"
             }
         }
         stage("Deploy") {

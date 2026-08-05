@@ -1,54 +1,125 @@
 plugins {
-	id 'java'
-	id 'org.springframework.boot' version '3.1.1'
-	id 'io.spring.dependency-management' version '1.1.0'
+    id 'java'
+    id 'org.springframework.boot' version '3.5.3'
+    id 'io.spring.dependency-management' version '1.1.7'
 }
-
 group = 'com.board'
 version = '0.0.1-SNAPSHOT'
-
 java {
-	sourceCompatibility = '17'
+    sourceCompatibility = '17'
 }
-
-configurations {
-	compileOnly {
-		extendsFrom annotationProcessor
-	}
-}
-
 repositories {
-	mavenCentral()
+    mavenCentral()
+    maven { url 'https://repo.spring.io/milestone' }
+    maven { url 'https://repo.spring.io/snapshot' }
 }
-
+ext {
+    set('springAiVersion', "1.1.4")
+}
 dependencies {
-	implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
-	implementation 'org.springframework.boot:spring-boot-starter-security'
-	//implementation 'org.springframework.boot:spring-boot-starter-thymeleaf'
-	implementation 'org.springframework.boot:spring-boot-starter-web'	
-	//implementation 'org.thymeleaf.extras:thymeleaf-extras-springsecurity6'
-	//implementation 'org.springframework.boot:spring-boot-starter-oauth2-client'
-	implementation group: 'commons-io', name: 'commons-io', version: '2.11.0'
-	implementation 'io.jsonwebtoken:jjwt-api:0.11.5'
-	implementation 'io.jsonwebtoken:jjwt-gson:0.11.5'
-	implementation 'org.apache.commons:commons-lang3:3.12.0'
-	implementation 'jakarta.xml.bind:jakarta.xml.bind-api:4.0.1'
-	implementation 'org.springframework.boot:spring-boot-starter-oauth2-client'
-	implementation "org.springdoc:springdoc-openapi-starter-webmvc-ui:2.6.0"
-	implementation 'org.springframework.boot:spring-boot-starter-websocket:3.4.1'	
-	//implementation 'org.springframework.boot:spring-boot-starter-actuator'
-	//implementation 'io.micrometer:micrometer-registry-prometheus'
-	
-	compileOnly 'org.projectlombok:lombok:1.18.30'
-	developmentOnly 'org.springframework.boot:spring-boot-devtools'
-	runtimeOnly 'com.oracle.database.jdbc:ojdbc8'
-	runtimeOnly 'io.jsonwebtoken:jjwt-impl:0.11.5'
-	annotationProcessor 'org.springframework.boot:spring-boot-configuration-processor'
-	annotationProcessor 'org.projectlombok:lombok:1.18.30'
-	testImplementation 'org.springframework.boot:spring-boot-starter-test'
-	testImplementation 'org.springframework.security:spring-security-test'
-}
+    // Web & JPA & Security
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    implementation 'org.springframework.boot:spring-boot-starter-security'
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-oauth2-client'
+    implementation 'org.springframework.boot:spring-boot-starter-websocket'
+    
+    // Utilities
+    implementation 'jakarta.xml.bind:jakarta.xml.bind-api:4.0.1'
 
+    // Mail
+    //implementation 'org.eclipse.angus:jakarta.mail:2.0.3'
+    implementation 'org.springframework.boot:spring-boot-starter-mail'
+    
+    // JWT
+    implementation 'io.jsonwebtoken:jjwt-api:0.11.5'
+    implementation 'io.jsonwebtoken:jjwt-gson:0.11.5'
+    runtimeOnly 'io.jsonwebtoken:jjwt-impl:0.11.5'
+    
+    // Swagger UI
+    implementation "org.springdoc:springdoc-openapi-starter-webmvc-ui:2.6.0"
+    
+    // Actuator & Prometheus
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    implementation 'io.micrometer:micrometer-registry-prometheus'
+    
+    // Redis
+    implementation 'org.springframework.boot:spring-boot-starter-data-redis'
+    
+    // OpenAI (Spring AI)
+    implementation 'org.springframework.ai:spring-ai-starter-model-openai'
+    
+    // MCP Server (같은 앱이 MCP 서버 역할 - Streamable HTTP)
+    implementation 'org.springframework.ai:spring-ai-starter-mcp-server-webmvc'
+ 
+    // MCP Client (같은 앱이 자신의 MCP 서버에 연결)
+    implementation 'org.springframework.ai:spring-ai-starter-mcp-client'
+    
+    // Vector DB: PGVector (Spring AI)
+    implementation 'org.springframework.ai:spring-ai-starter-vector-store-pgvector'
+    runtimeOnly 'org.postgresql:postgresql'
+    
+    // RAG Advisor
+	implementation 'org.springframework.ai:spring-ai-advisors-vector-store'
+    
+    // 구글 통합 비서(에이전트)
+    implementation 'com.google.apis:google-api-services-gmail:v1-rev110-1.25.0'
+    implementation 'com.google.apis:google-api-services-calendar:v3-rev411-1.25.0'
+    implementation 'com.google.auth:google-auth-library-oauth2-http:1.20.0'
+    
+    // WebFlux (SSE 스트리밍)
+    implementation 'org.springframework.boot:spring-boot-starter-webflux'
+    
+    // PDF 텍스트 추출
+    implementation 'org.apache.pdfbox:pdfbox:3.0.3'
+    
+    // Word / Excel / PPT 텍스트 추출 (Apache POI)
+    implementation 'org.apache.poi:poi-ooxml:5.3.0'
+    implementation 'org.apache.poi:poi:5.3.0'  // HSSFWorkbook (.xls용)
+    
+    // Slack 설정
+    // Tyrus : Jakarta WebSocket 표준(JSR-356)의 구현체(RI, Reference Implementation)
+    // Grizzly : Tyrus가 실제 네트워크 I/O를 처리할 때 사용하는 엔진으로 Slack WebSocket 세션을 열고 닫는 작업을 Grizzly 스레드가 담당
+    /*
+     Slack Socket Mode 연결 흐름
+     1. SlackBotConfig
+     2. bolt-jakarta-socket-mode (Slack SDK)
+     3. Tyrus (Jakarta WebSocket 구현체)
+     4. Grizzly NIO Transport8  
+     5. 실제 네트워크 통신 (TCP/WebSocket) 작동
+    */
+    implementation 'com.slack.api:slack-api-client:1.44.2'
+    implementation 'com.slack.api:slack-api-model:1.44.2'
+    implementation 'com.slack.api:bolt:1.44.2'
+    implementation 'com.slack.api:bolt-jakarta-socket-mode:1.44.2'
+    implementation 'com.slack.api:bolt-jakarta-servlet:1.44.2'
+    implementation 'org.glassfish.tyrus.bundles:tyrus-standalone-client:2.2.2'
+    
+    // Lombok & Annotation Processor
+    compileOnly 'org.projectlombok:lombok:1.18.30'
+    annotationProcessor 'org.springframework.boot:spring-boot-configuration-processor'
+    annotationProcessor 'org.projectlombok:lombok:1.18.30'
+    
+    // Database (Oracle)    
+    runtimeOnly 'com.oracle.database.jdbc:ojdbc11:21.21.0.0'
+    
+    // Kafka
+    implementation 'org.springframework.kafka:spring-kafka'
+	testImplementation 'org.springframework.kafka:spring-kafka-test'
+    
+    // Test
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testImplementation 'org.springframework.security:spring-security-test'
+}
+dependencyManagement {
+    imports {
+        mavenBom "org.springframework.ai:spring-ai-bom:${springAiVersion}"
+    }
+}
 tasks.named('test') {
-	useJUnitPlatform()
+    useJUnitPlatform()
+}
+// -parameters 플래그 활성화 (@RequestParam, @PathVariable 이름 인식)
+tasks.withType(JavaCompile) {
+    options.compilerArgs.add("-parameters")
 }

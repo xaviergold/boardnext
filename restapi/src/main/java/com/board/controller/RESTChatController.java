@@ -3,18 +3,13 @@ package com.board.controller;
 import java.util.List;
 
 import org.springframework.http.ResponseEntity;
-import org.springframework.messaging.handler.annotation.MessageMapping;
-import org.springframework.messaging.simp.SimpMessageSendingOperations;
 import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import com.board.dto.ChatMessageDTO;
-import com.board.dto.ChatRoomDTO;
-import com.board.service.ChatService;
+import com.board.dto.chat.ChatRoomDTO;
+import com.board.service.chat.ChatService;
 
 import lombok.AllArgsConstructor;
 import lombok.extern.log4j.Log4j2;

@@ -6,7 +6,7 @@ import java.time.LocalDateTime;
 import org.aspectj.apache.bcel.classfile.NestHost;
 import org.hibernate.annotations.ColumnDefault;
 
-import com.board.dto.MemberDTO;
+import com.board.dto.board.MemberDTO;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -79,6 +79,9 @@ public class MemberEntity {
 	@Column(name="fromsocial",length=2, nullable=false)
 	private String FromSocial;
 	
+	@Column(name="secretary",length=2, nullable=true)
+	private String secretary;
+	
 	@Column(name="authkey",length=200, nullable=true)
 	private String authkey;
 	
@@ -103,6 +106,7 @@ public class MemberEntity {
 		this.gender = member.getGender();
 		this.hobby = member.getHobby();
 		this.job = member.getJob();
+		this.secretary = member.getSecretary();
 		this.zipcode = member.getZipcode();
 		this.address = member.getAddress();
 		this.telno = member.getTelno();

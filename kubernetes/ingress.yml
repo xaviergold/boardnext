@@ -1,5 +1,85 @@
+# ================================================================
+# [ConfigMap 1] NGINX Ingress Controller 전역 설정
+#
+# ▶ 역할: NGINX Ingress Controller 자체의 동작 방식을 전역으로 제어
+#         이 ConfigMap의 name은 반드시 "ingress-nginx-controller" 이어야 함
+#         (Controller가 시작 시 이 이름으로 자동 참조)
+#
+# ▶ allow-snippet-annotations: "true"
+#    - 각 Ingress 리소스의 annotations에서
+#      nginx.ingress.kubernetes.io/configuration-snippet 사용을 허용
+#    - 이 값이 "false"이면 아래 Ingress들의 configuration-snippet이
+#      모두 무시되어 캐시 정책이 적용되지 않음
+#    - 보안 고려: snippet은 임의 NGINX 설정을 주입할 수 있으므로
+#      신뢰할 수 있는 환경에서만 true로 설정
+# ================================================================
 apiVersion: v1
-kind: Service  #이 Service는 ingress-nginx 시스템의 controller용 Service
+kind: ConfigMap
+metadata:
+  name: ingress-nginx-controller
+  namespace: ingress-nginx
+  labels:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/instance: ingress-nginx
+    app.kubernetes.io/name: ingress-nginx
+    app.kubernetes.io/part-of: ingress-nginx
+    app.kubernetes.io/version: 1.11.1
+data:
+  allow-snippet-annotations: "true"
+---
+# ================================================================
+# [ConfigMap 2] 프록시 요청 시 백엔드로 전달할 커스텀 HTTP 헤더 정의
+#
+# ▶ 역할: NGINX가 백엔드 서비스(apache-service, boardrest-service 등)로
+#         요청을 프록시할 때 추가할 HTTP 헤더를 key-value로 정의
+#         아래 Ingress의 proxy-set-headers 어노테이션에서 이 ConfigMap을 참조
+#
+# ▶ Apache 원본 설정:
+#     RequestHeader set X-Forwarded-Proto "https"
+#     RequestHeader set X-Forwarded-Port "443"
+#
+# ▶ X-Forwarded-Proto: "https"
+#    - 클라이언트가 HTTPS로 접속했음을 백엔드에 알림
+#    - Spring Boot Security, Spring Session 등에서
+#      이 헤더를 보고 리다이렉트 URL을 https://로 생성함
+#    - 없으면 OAuth2 콜백 URL이 http://로 생성되어 소셜 로그인 실패
+#
+# ▶ X-Forwarded-Port: "443"
+#    - 클라이언트가 접속한 포트를 백엔드에 알림
+#    - Spring Boot가 Location 헤더나 리다이렉트 URL 생성 시 포트 참조
+# ================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: boardnext-proxy-headers
+  namespace: default
+data:
+  X-Forwarded-Proto: "https"
+  X-Forwarded-Port: "443"
+---
+# ================================================================
+# [Service] NGINX Ingress Controller LoadBalancer 서비스
+#
+# ▶ 역할: 외부 트래픽(인터넷)을 클러스터 내부로 받아들이는 진입점
+#         MetalLB가 외부 IP를 이 Service에 할당하고,
+#         이 Service가 NGINX Ingress Controller Pod로 트래픽을 전달
+#
+# ▶ 트래픽 흐름:
+#     인터넷 → MetalLB External IP → 이 Service(80/443)
+#     → NGINX Ingress Controller Pod → 각 백엔드 Service
+#
+# ▶ metallb.universe.tf/address-pool: boardnext-pool
+#    - MetalLB가 IP를 할당할 때 사용할 address-pool 이름 지정
+#    - MetalLB IPAddressPool 리소스에 "boardnext-pool"로 정의된
+#      IP 대역에서 External IP를 자동 할당받음
+#
+# ▶ externalTrafficPolicy: Local
+#    - 외부 트래픽을 받은 노드의 Pod에만 전달 (다른 노드로 hop 없음)
+#    - 클라이언트의 실제 IP(X-Real-IP)가 보존됨
+#    - Cluster 정책은 노드 간 hop이 발생해 클라이언트 IP가 손실됨
+# ================================================================
+apiVersion: v1
+kind: Service
 metadata:
   name: ingress-nginx-controller
   namespace: ingress-nginx
@@ -7,7 +87,7 @@ metadata:
     app.kubernetes.io/name: ingress-nginx
     app.kubernetes.io/part-of: ingress-nginx
     app.kubernetes.io/component: controller
-  annotations: 
+  annotations:
     metallb.universe.tf/address-pool: boardnext-pool
 spec:
   type: LoadBalancer
@@ -25,15 +105,60 @@ spec:
     app.kubernetes.io/name: ingress-nginx
     app.kubernetes.io/component: controller
 ---
+# ================================================================
+# [Ingress 1] /_next/static/ 전용 Ingress → 브라우저 장기 캐시 (1년)
+#
+# ▶ 역할: Next.js 빌드 결과물의 정적 파일(JS, CSS 등)에 대해
+#         브라우저가 1년간 캐시하도록 응답 헤더를 설정
+#
+# ▶ Apache 원본 설정:
+#     Alias /_next/static "C:/MySource/React/boardnext/.next/static"
+#     Header set Cache-Control "public, max-age=31536000, immutable"
+#
+# ▶ 장기 캐시가 안전한 이유:
+#     Next.js 빌드 시 파일명에 콘텐츠 해시가 자동 삽입됨
+#     예) main-a1b2c3d4.js → 내용 변경 시 해시도 바뀌어 새 파일로 인식
+#     따라서 파일 내용이 바뀌어도 stale 캐시 문제가 발생하지 않음
+#
+# ▶ ※ 반드시 Ingress 2(boardnext-ingress)보다 먼저 선언해야 함
+#     NGINX Ingress는 더 구체적인 경로(/_next/static/)를 우선 처리하지만
+#     명시적으로 분리된 Ingress 리소스로 관리하는 것이 안전함
+#
+# ----------------------------------------------------------------
+# [annotations 상세 설명]
+#
+# ▶ nginx.ingress.kubernetes.io/ssl-redirect: "true"
+#    - HTTP(80) 요청을 HTTPS(443)로 자동 리다이렉트
+#    - Apache: RewriteRule ^(.*)$ https://%{HTTP_HOST}%{REQUEST_URI} [R=301,L]
+#
+# ▶ nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+#    - ssl-redirect와 함께 사용. X-Forwarded-Proto 헤더와 무관하게
+#      무조건 HTTPS로 강제 리다이렉트
+#    - 프록시 뒤에 있어도 반드시 HTTPS 강제 적용 보장
+#
+# ▶ nginx.ingress.kubernetes.io/proxy-set-headers: "default/boardnext-proxy-headers"
+#    - 위에서 정의한 ConfigMap(namespace/name 형식)을 참조하여
+#      백엔드로 프록시 시 X-Forwarded-Proto, X-Forwarded-Port 헤더 주입
+#
+# ▶ nginx.ingress.kubernetes.io/configuration-snippet: |
+#      add_header Cache-Control "public, max-age=31536000, immutable" always;
+#    - 이 Ingress에 매칭된 응답에 Cache-Control 헤더를 추가
+#    - public     : 브라우저 + CDN/프록시 모두 캐시 허용
+#    - max-age=31536000 : 1년(초 단위) 동안 캐시 유지
+#    - immutable  : 캐시 유효기간 내에는 조건부 요청(If-None-Match 등)도 하지 않음
+#    - always     : 200 외 응답 코드(304 등)에도 항상 헤더 추가
+# ================================================================
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: boardnext-ingress
+  name: boardnext-static-ingress
   namespace: default
   annotations:
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
     nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
-    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/proxy-set-headers: "default/boardnext-proxy-headers"
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      add_header Cache-Control "public, max-age=31536000, immutable" always;
 spec:
   ingressClassName: nginx
   tls:
@@ -44,15 +169,140 @@ spec:
     - host: www.boardnext.com
       http:
         paths:
-          # 1. API 서비스 경로 추가 (반드시 / 보다 위에 위치해야 함)
-          - path: /api
+          # /_next/static/ → apache-service (Next.js 빌드 정적 파일: JS, CSS, 이미지 등)
+          # Apache의 Alias /_next/static 과 동일한 역할
+          - path: /_next/static/
             pathType: Prefix
             backend:
               service:
-                name: boardrest-service
+                name: apache-service
                 port:
-                  number: 8080
-          # 2. 기존 프론트엔드 경로
+                  number: 80
+---
+# ================================================================
+# [Ingress 2] 메인 Ingress → 모든 경로 라우팅 + 동적 콘텐츠 캐시 무효화
+#
+# ▶ 역할: 외부에서 들어오는 모든 요청을 경로별로 적절한 백엔드 서비스로 라우팅
+#         .html / .json 파일은 캐시하지 않도록 응답 헤더 설정
+#
+# ▶ Apache 원본 캐시 무효화 설정:
+#     <LocationMatch "^(?!/_next/static/).*\.(html|json)$">
+#       Header set Cache-Control "no-cache, no-store, must-revalidate"
+#       Header set Pragma "no-cache"
+#       Header set Expires 0
+#
+# ▶ 경로 우선순위 (위에서 아래로, 더 구체적인 경로가 우선):
+#     /_next/static/ → Ingress 1에서 처리 (이 Ingress에 도달하지 않음)
+#     /api           → boardrest-service:8080
+#     /actuator      → boardrest-service:8080
+#     /oauth2/authorization → boardrest-service:8080
+#     /login/oauth2/code    → boardrest-service:8080
+#     /ws            → chat-service:4000
+#     /              → apache-service:80 (catch-all, 반드시 마지막)
+#
+# ▶ /mcp 경로는 클러스터 내부에서만 호출되므로 Ingress 불필요
+#     내부 호출: http://boardrest-service:8080/mcp/...
+#
+# ----------------------------------------------------------------
+# [annotations 상세 설명]
+#
+# ▶ nginx.ingress.kubernetes.io/ssl-redirect: "true"
+#    - HTTP(80) 요청을 HTTPS(443)로 자동 리다이렉트 (301)
+#    - Apache: RewriteRule ^(.*)$ https://%{HTTP_HOST}%{REQUEST_URI} [R=301,L]
+#
+# ▶ nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+#    - X-Forwarded-Proto 헤더와 무관하게 무조건 HTTPS 강제 리다이렉트
+#    - 로드밸런서/프록시 뒤에 배치된 환경에서도 HTTPS 강제 보장
+#
+# ▶ nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+#    - 클라이언트가 업로드할 수 있는 최대 요청 본문 크기
+#    - 기본값은 1m이므로 파일 첨부 기능을 위해 10m으로 확장
+#    - Apache: LimitRequestBody 또는 별도 설정에 해당
+#    - 초과 시 NGINX가 413 (Request Entity Too Large) 반환
+#
+# ▶ nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+#    - NGINX가 백엔드로부터 응답을 기다리는 최대 시간 (초)
+#    - 기본값 60초. WebSocket, AI 응답 등 장시간 처리를 위해 1시간으로 설정
+#    - 초과 시 NGINX가 504 (Gateway Timeout) 반환
+#
+# ▶ nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+#    - NGINX가 백엔드로 요청을 전송하는 데 허용되는 최대 시간 (초)
+#    - 대용량 파일 업로드 또는 느린 네트워크 환경 대응
+#    - proxy-read-timeout과 함께 WebSocket 연결 유지에 필수
+#
+# ▶ nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+#    - NGINX가 백엔드 서비스와 통신할 프로토콜 명시
+#    - 백엔드(apache-service, boardrest-service)가 HTTP로 동작하므로 HTTP 지정
+#    - HTTPS 백엔드라면 "HTTPS", gRPC라면 "GRPC"로 설정
+#
+# ▶ nginx.ingress.kubernetes.io/proxy-set-headers: "default/boardnext-proxy-headers"
+#    - ConfigMap(boardnext-proxy-headers)에 정의된 헤더를 백엔드로 전달
+#    - X-Forwarded-Proto: https → 백엔드가 HTTPS 환경임을 인지
+#    - X-Forwarded-Port: 443   → 백엔드가 올바른 포트로 URL 생성
+#    - 형식: "네임스페이스/ConfigMap이름"
+#
+# ▶ nginx.ingress.kubernetes.io/configuration-snippet: |
+#    - 이 Ingress에 매칭된 location 블록 안에 임의 NGINX 설정을 삽입
+#    - ConfigMap 1의 allow-snippet-annotations: "true" 가 선행되어야 동작
+#    - Apache의 <LocationMatch> 디렉티브와 동일한 역할
+#
+#    if ($uri ~* "\.(html|json)$") {
+#      → URI가 .html 또는 .json 으로 끝나는 경우
+#
+#      add_header Cache-Control "no-cache, no-store, must-revalidate" always;
+#        - no-cache     : 캐시 저장은 하되 사용 전 반드시 서버에 재검증
+#        - no-store     : 캐시 자체를 저장하지 않음 (민감 데이터 보호)
+#        - must-revalidate : 캐시 만료 시 반드시 서버 재검증 (stale 사용 금지)
+#
+#      add_header Pragma "no-cache" always;
+#        - HTTP/1.0 하위 호환용 캐시 무효화 헤더
+#
+#      add_header Expires "0" always;
+#        - 즉시 만료 처리 (HTTP/1.0 하위 호환)
+#    }
+#
+#    ※ 원래 바깥쪽에 if ($uri !~* "^/_next/static/") 를 한 번 더 감쌌으나
+#      nginx는 if 블록 중첩을 허용하지 않아 admission webhook에서
+#      "if" directive is not allowed here 오류가 발생했음.
+#      /_next/static/ 요청은 어차피 Ingress 1(boardnext-static-ingress)이
+#      더 구체적인 경로로 먼저 매칭해 처리하므로, 이 Ingress의 location에는
+#      도달하지 않아 바깥쪽 조건 없이도 동일하게 동작함.
+# ================================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: boardnext-ingress
+  namespace: default
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+    nginx.ingress.kubernetes.io/proxy-set-headers: "default/boardnext-proxy-headers"
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      if ($uri ~* "\.(html|json)$") {
+        add_header Cache-Control "no-cache, no-store, must-revalidate" always;
+        add_header Pragma "no-cache" always;
+        add_header Expires "0" always;
+      }
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - www.boardnext.com
+      secretName: tlssecret
+  rules:
+    - host: www.boardnext.com
+      http:
+        paths:
+          # -------------------------------------------------------
+          # 1. 루트 경로 (catch-all) ➡️ apache-service:80
+          #    Next.js 프론트엔드 페이지 및 정적 파일 서빙
+          #    Apache: ProxyPass / http://127.0.0.1:3000/ (catch-all, 마지막)
+          #    ※ pathType: Prefix "/" 는 가장 낮은 우선순위로 처리됨
+          # -------------------------------------------------------
           - path: /
             pathType: Prefix
             backend:
@@ -60,3 +310,74 @@ spec:
                 name: apache-service
                 port:
                   number: 80
+
+          # -------------------------------------------------------
+          # 2. 비즈니스 REST API ➡️ boardrest-service:8080
+          #    Spring Boot REST API 엔드포인트
+          #    Apache: JkMount /api study / JkMount /api/* study
+          # -------------------------------------------------------
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: boardrest-service
+                port:
+                  number: 8080
+
+          # -------------------------------------------------------
+          # 3. Spring Boot Actuator ➡️ boardrest-service:8080
+          #    헬스체크, 메트릭, 환경정보 등 시스템 관제 엔드포인트
+          #    Prometheus가 /actuator/prometheus 를 스크래핑
+          #    Apache: JkMount /actuator study / JkMount /actuator/* study
+          # -------------------------------------------------------
+          - path: /actuator
+            pathType: Prefix
+            backend:
+              service:
+                name: boardrest-service
+                port:
+                  number: 8080
+
+          # -------------------------------------------------------
+          # 4. 소셜 로그인 시작 엔드포인트 ➡️ boardrest-service:8080
+          #    Spring Security OAuth2 Client가 소셜 로그인 시작 시 사용
+          #    예) GET /oauth2/authorization/naver → 네이버 로그인 페이지로 리다이렉트
+          #    Apache: JkMount /oauth2/authorization/* study
+          # -------------------------------------------------------
+          - path: /oauth2/authorization
+            pathType: Prefix
+            backend:
+              service:
+                name: boardrest-service
+                port:
+                  number: 8080
+
+          # -------------------------------------------------------
+          # 5. 소셜 로그인 콜백 주소 ➡️ boardrest-service:8080
+          #    소셜 플랫폼(Naver, Google 등)이 인증 후 리다이렉트하는 URI
+          #    예) GET /login/oauth2/code/naver?code=xxx&state=yyy
+          #    Spring Security가 이 요청을 받아 Access Token 교환 처리
+          #    Apache: JkMount /login/oauth2/code/* study
+          # -------------------------------------------------------
+          - path: /login/oauth2/code
+            pathType: Prefix
+            backend:
+              service:
+                name: boardrest-service
+                port:
+                  number: 8080
+
+          # -------------------------------------------------------
+          # 6. WebSocket 통신 ➡️ chat-service:4000
+          #    실시간 채팅을 위한 WebSocket 엔드포인트
+          #    NGINX Ingress는 기본적으로 WebSocket 업그레이드를 지원하므로
+          #    별도 mod_proxy_wstunnel 없이 동작 (Apache와 차이점)
+          #    Apache: ProxyPass /ws ws://127.0.0.1:4000/
+          # -------------------------------------------------------
+          - path: /ws
+            pathType: Prefix
+            backend:
+              service:
+                name: chat-service
+                port:
+                  number: 4000

@@ -3,7 +3,12 @@ kind: Deployment
 metadata:
   name: apache-deployment
 spec:
-  replicas: 1
+  #replicas: 1
+  strategy:   #배포전략 - Rolling
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 25%   #업데이트 중 추가로 띄울 수 있는 최대 파드 비율
+      maxUnavailable: 25%  #업데이트 중 동시에 다운될 수 있는 최대 파드 비율
   selector:
     matchLabels:
       app: apache
@@ -15,20 +20,20 @@ spec:
     spec:
       containers:
       - name: apache
-        image: docker.io/redleon1/apache_boardnext:{{VERSION}}
+        image: docker.io/redleon1/apache-boardnext:{{VERSION}}
         imagePullPolicy: Always
         ports:
         - containerPort: 80
-        volumeMounts:
-        - name: apache-vhosts-volume
-          mountPath: /usr/local/apache2/conf/extra/httpd-vhosts.conf #덮어쓸 경로
-          subPath: httpd-vhosts.conf # ConfigMap에서 가져올 특정 키(파일명)
+        # HPA를 위한 리소스 요청량 추가
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "250m"
+            memory: "256Mi"
       imagePullSecrets:
       - name: docker-secret
-      volumes:
-      - name: apache-vhosts-volume
-        configMap:
-          name: boardnext-config  #configMap의 metadata name 
 
 ---
 apiVersion: v1
@@ -43,3 +48,32 @@ spec:
   selector:
     app: apache
   type: NodePort
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: apache-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: apache-deployment
+  minReplicas: 1
+  maxReplicas: 1
+  metrics:
+  #1. Metrics Server를 바라보는 기본 설정 (CPU가 70%를 넘으면 늘려라!)  
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 50
+  #2. Prometheus를 바라보는 커스텀 설정 (초당 요청이 100건을 넘으면 늘려라!)
+  - type: Pods
+    pods:
+      metric:
+        name: http_requests_per_second
+      target:
+        type: AverageValue
+        averageValue: 100

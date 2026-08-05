@@ -1,0 +1,114 @@
+# 1. Redis 설정 파일 (ConfigMap)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-config
+data:
+  redis.conf: |
+    bind 0.0.0.0
+    maxmemory 500mb
+    maxmemory-policy allkeys-lru
+    requirepass 12345
+    appendonly yes
+
+---
+
+# 2. 실제 물리 저장소 정의 (PersistentVolume)
+# 윈도우와 cifs로 연결된 우분투의 /home/xavier/pvShare 경로를 저장소로 등록.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: redis-local-pv
+spec:
+  capacity:
+    storage: 1Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: local-storage
+  local:
+    path: /home/xavier/pvShare  # 마운트한 실제 경로 적용
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: kubernetes.io/hostname
+          operator: In
+          values:
+          - xavier-virtual-machine  # 'kubectl get nodes' 명령어로 나오는 실제 노드 이름 입력
+
+---
+
+# 3. 데이터 저장소 요청 (PersistentVolumeClaim)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: redis-data-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: local-storage
+
+---
+
+# 4. Redis 컨트롤러 및 컨테이너 정의 (Deployment)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  labels:
+    app: redis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      tolerations:
+      - key: "node-role.kubernetes.io/control-plane"
+        operator: "Exists"
+        effect: "NoSchedule" 
+      containers:
+      - name: redis
+        image: redis:latest
+        command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
+        ports:
+        - containerPort: 6379
+          name: redis
+        volumeMounts:
+        - name: config-volume
+          mountPath: /usr/local/etc/redis/redis.conf
+          subPath: redis.conf
+        - name: data-volume
+          mountPath: /data
+      volumes:
+      - name: config-volume
+        configMap:
+          name: redis-config
+      - name: data-volume
+        persistentVolumeClaim:
+          claimName: redis-data-pvc
+
+---
+
+# 5. 네트워크 & 서비스
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-service
+spec:
+  type: NodePort
+  ports:
+  - port: 6379       # 쿠버네티스 내부에서 스프링이 접속할 포트
+    targetPort: 6379 # Redis 컨테이너 자체 포트
+    nodePort: 31379  # 윈도우 호스트(외부)에서 접속할 포트 (30000-32767 범위 준수)
+  selector:
+    app: redis

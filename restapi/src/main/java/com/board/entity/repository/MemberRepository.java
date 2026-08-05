@@ -13,7 +13,7 @@ import jakarta.transaction.Transactional;
 public interface MemberRepository extends JpaRepository<MemberEntity,String>{
 	public MemberEntity findByAuthkey(String authkey);
 	public Optional<MemberEntity> findByUsernameAndTelno(String username, String telno);
-	
+		
 	//로그인 시 패스워드 변경 기한 30일 이후로 연기
 	@Transactional
 	@Modifying //테이블에 DML(insert, update, delete)을 실행 시켜 변화를 주었을 경우 테이블에 반영된 내용을 엔티티 클래스에 반영 

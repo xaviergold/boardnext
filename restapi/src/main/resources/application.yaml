@@ -1,0 +1,205 @@
+spring:
+  profiles:
+    active: local
+  #자바 메일 사용 - 구글 계정 설정  
+  mail:
+    host: smtp.gmail.com
+    port: 587
+    username: khw8017@gmail.com
+    password: ${EMAIL_PW}
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true  
+  
+  application:
+    name: Boardnext
+  datasource:
+    # Hibernate 메타 조회용 (표준 경로) - Oracle 메인 DB
+    url: ${DBMS_URL}
+    driver-class-name: ${DBMS_DRIVER}
+    username: ${DBMS_USERNAME}
+    password: ${DBMS_PW}
+    # HikariCP 전용 설정
+    hikari:
+      jdbc-url: ${DBMS_URL}
+      driver-class-name: ${DBMS_DRIVER}
+      username: ${DBMS_USERNAME}
+      password: ${DBMS_PW}
+      connection-test-query: SELECT sysdate FROM DUAL
+      maximum-pool-size: 10
+      minimum-idle: 2
+
+  # JPA 설정
+  jpa:
+    database: oracle
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        format_sql: false
+    show-sql: false
+
+  # 파일 업로드 설정
+  servlet:
+    multipart:
+      max-file-size: 1024MB
+      max-request-size: 1024MB
+
+  # JSON 설정
+  # JPA 엔티티를 직접 JSON으로 반환하다가 발생하는 프록시 객체 직렬화 에러나, 
+  # 공공 API 통신/오브젝트 매핑 과정에서 속성이 비어 있는 객체 때문에 
+  # 전체 로직이 망가지는 현상을 막기 위한 예방 조치(방어적 코드)로 false를 사용.
+  # 즉, 비어 있는 객체(Bean)를 JSON으로 바꿀 때, 에러 내지 말고 
+  # 그냥 빈 JSON {}으로 만들어줘"라고 잭슨(Jackson) 라이브러리에게 명령하는 것
+  jackson:
+    serialization:
+      fail-on-empty-beans: false
+
+  # OpenAI API 설정
+  ai:
+    openai:
+      api-key: ${OPENAI_API_KEY}
+      chat:
+        options:
+          model: gpt-5.4-mini    
+          #model: gpt-5-mini
+          #temperature: 1.0
+    # PGVector 설정
+    vectorstore:
+      pgvector:
+        index-type: HNSW
+        distance-type: COSINE_DISTANCE
+        dimensions: 1536          # text-embedding-ada-002 / text-embedding-3-small 기본값
+        initialize-schema: true   # 최초 실행 시 vector_store 테이블 자동 생성
+
+    # ─────────────────────────────────────────────────────────
+    # MCP Server 설정 (BoardRest가 MCP 서버 역할을 겸함)
+    # Streamable HTTP 프로토콜로 /mcp 엔드포인트 노출
+    # MCP Client URL은 프로파일별 yaml에서 설정
+    #   dev   → application-dev.yaml   : http://localhost:8080/mcp
+    #   local → application-local.yaml : https://www.boardnext.com/mcp
+    #   prod  → application-prod.yaml  : http://boardrest-service:8080/mcp
+    # ─────────────────────────────────────────────────────────
+    mcp:
+      server:
+        enabled: true
+        name: boardnext-mcp-server
+        version: 1.0.0
+        protocol: STREAMABLE       # Streamable HTTP (SSE 후속, 프로덕션 표준)
+        type: SYNC                 # 동기 방식
+  
+  # Kafka 설정
+  kafka:
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      properties:
+        spring.json.add.type.headers: false
+        acks: all
+    consumer:
+      group-id: boardnext-group
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: "*"
+
+# =============================================
+# 외부 API 설정 (Weather, SerpApi)
+# =============================================
+external:
+  api:
+    weather:
+      key: ${OPENWEATHERMAP_API_KEY}
+    #serp:
+      #key: ${SERP_API_KEY}  
+    naver:
+      client-id:
+        FE6XiELtSPbY5oWgkEcD
+      client-secret:
+        9vSQ1180Wf 
+    #세션 만료 시 --> https://www.boardnext.com/oauth2/authorization/google-secretary            
+    google:
+      search-key: AIzaSyAsj9ZKZp7djDtUBFd9I2yQxZTZAVHAXSg
+      search-cx: a1eed32b017a54390           
+
+# =============================================
+# 톰캣 및 HTTP 커넥터 설정
+# =============================================
+server:
+  tomcat:
+    # HTTP 커넥터 파트 개수 제한
+    # 스프링부트 3.5.1부터 적용된 보안 취약점 Patch로 인해 multipart/form-data 요청에 포함될 수 있는 최대 파트 수(maxPartCount)가 기본값 10개로 제한
+    # 즉, 전송된 폼 필드와 파일의 총합이 10개를 초과하면 org.apache.tomcat.util.http.fileupload.impl.FileCountLimitExceededException 에러 발생
+    # multipart/form-data 요청에서 업로드 가능한 파트(part)의 최대 개수
+    max-part-count: 100
+    # HTTP 요청 파라미터의 최대 개수. HTTP 요청 파라미터는 브라우저가 서버에 보내는 이름=값(name=value) 형태의 데이터
+    max-parameter-count: 10000
+    
+# =============================================
+# 프로메테우스 및 액추에이터 설정
+# =============================================
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics,prometheus,info
+      cors:
+        allowed-origins: 
+          - http://localhost:3000
+          - http://www.boardreact.com
+          - https://www.boardreact.com
+          - http://www.boardnext.com
+          - https://www.boardnext.com
+          - http://www.boardnuxt.com
+        allowed-methods: GET,POST
+        allowed-headers: "*"
+        
+  endpoint:
+    health:
+      show-details: always
+      
+  info:
+    defaults:
+      enabled: true
+    build:
+      enabled: true
+    env:
+      enabled: true
+    java:
+      enabled: true
+      
+  metrics:
+    tags:
+      application: boardrest    
+
+# 커스텀 톰캣 AJP 설정
+tomcat:
+  ajp:
+    protocol: AJP/1.3
+    port: 8009
+    enabled: true
+
+# JWT secret 설정
+jwt:
+  secret: BoardRestBoardRestBoardRestBoardRestBoardRestBoardRestBoardRestBoardRestBoardRestBoardRest
+  
+# Slack WebHook 연결
+slack:
+  webhook:
+    url: https://hooks.slack.com/services/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
+  bot:
+    token: xoxb-6388161399702-11426096597668-Pbupd4ZHXZkn6DexRoQ3acVz
+    app-token: xapp-1-A0BC7V6G5CK-11426034876260-45fb75f42240586d927d806377464d892423de55175691a4dfdf0ce544fa263d
+    signing-secret: f54bc9af5164df6e7cf17cf0f5acb494  
+
+# 로그 출력 방식 설정. TRACE < DEBUG < INFO < WARN < ERROR
+logging:
+  level:
+    # 하이버네이트(DB) 커넥션 풀 관련 로그는 일반적인 정보(INFO)와 경고, 에러만 출력
+    org.hibernate.orm.connections.pooling: INFO
+    # (com.board)은 현재 개발 중이거나 확인이 필요하므로, 상세한 디버깅 정보(DEBUG)까지 꼼꼼하게 다 출력
+    com.board: DEBUG

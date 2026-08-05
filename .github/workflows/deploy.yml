@@ -43,16 +43,16 @@ jobs:
       - name: Build and Push Docker Images
         run: |
           # Build 
-          docker build --no-cache -t redleon1/apache_boardnext:${{ github.run_number }} ./docker/apache2/
-          docker build --no-cache -t redleon1/boardrest_boardnext:${{ github.run_number }} ./docker/boardrest/
+          docker build --no-cache -t redleon1/apache-boardnext:${{ github.run_number }} ./docker/apache2/
+          docker build --no-cache -t redleon1/boardrest-boardnext:${{ github.run_number }} ./docker/boardrest/
           
           # Push
-          docker push redleon1/apache_boardnext:${{ github.run_number }}
-          docker push redleon1/boardrest_boardnext:${{ github.run_number }}
+          docker push redleon1/apache-boardnext:${{ github.run_number }}
+          docker push redleon1/boardrest-boardnext:${{ github.run_number }}
           
           # Clean up (self-hosted 서버 용량 관리)
-          docker image rm redleon1/apache_boardnext:${{ github.run_number }}
-          docker image rm redleon1/boardrest_boardnext:${{ github.run_number }}
+          docker image rm redleon1/apache-boardnext:${{ github.run_number }}
+          docker image rm redleon1/boardrest-boardnext:${{ github.run_number }}
 
       # 6. Kubernetes Deploy & Ingress IP 추출 (💡 오직 Apache와 BoardRest만 배포)
       - name: Deploy to Kubernetes

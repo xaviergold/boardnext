@@ -3,7 +3,12 @@ kind: Deployment
 metadata:
   name: boardrest-deployment
 spec:
-  replicas: 1
+  #replicas: 1
+  strategy: # 배포전략 - Rolling
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
   selector:
     matchLabels:
       app: boardrest
@@ -20,13 +25,43 @@ spec:
           type: DirectoryOrCreate 
       containers:
       - name: boardrest
-        image: docker.io/redleon1/boardrest_boardnext:{{VERSION}}
+        image: docker.io/redleon1/boardrest-boardnext:{{VERSION}}
         imagePullPolicy: Always
         volumeMounts:
         - name: boardrest-data
           mountPath: /var/opt/Repository
         ports:
         - containerPort: 8080
+        # HPA를 위한 리소스 요청량
+        # Kafka consumer 5개 그룹 상시 heartbeat + Slack Socket Mode + Spring AI/MCP + Tomcat + Hibernate가
+        # 동시에 CPU를 요구하는 구조라 500m으로는 부족 (cpu.stat 확인 결과 nr_throttled=953, throttled_usec=128.9s)
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "512Mi"
+          limits:
+            cpu: "1500m"
+            memory: "1Gi"
+        # 부팅(Oracle+PgVector+Kafka+Slack 초기화) 동안은 startupProbe가 감시를 전담하고,
+        # 부팅 완료 후에만 readinessProbe로 감시 권한이 넘어감
+        # 주의: Started 로그(21초)가 찍혀도 /actuator/health가 실제 UP을 리턴하기까지는
+        # 별도 시간이 걸릴 수 있음 - 이전엔 failureThreshold=30(150초) 한계에 걸려
+        # kubelet이 SIGTERM으로 강제 종료시킴. 원인 파악 전까지 여유를 크게 잡아둠.
+        startupProbe:
+          httpGet:
+            path: /actuator/health
+            port: 8080
+          periodSeconds: 10
+          timeoutSeconds: 5      # 기본값 1s가 부족했던 게 실제 원인 - readinessProbe와 동일하게 5s로
+          failureThreshold: 60   # 10s * 60 = 최대 600초(10분)까지 부팅 허용
+        readinessProbe:
+          httpGet:
+            path: /actuator/health # 스프링 부트 헬스체크 엔드포인트
+            port: 8080
+          initialDelaySeconds: 10  # startupProbe 통과 직후이므로 최소 대기만
+          periodSeconds: 10
+          timeoutSeconds: 5        # 기본값 1s는 CPU 경합 시 너무 타이트해서 5s로 완화
+          failureThreshold: 3
         env:
         # 1. ConfigMap에서 가져오는 값
         - name: DBMS_DRIVER
@@ -44,12 +79,41 @@ spec:
             configMapKeyRef:
               name: boardnext-config
               key: DBMS_USERNAME
-        # 2. Secret에서 가져오는 값
+        - name: OPENWEATHERMAP_API_KEY
+          valueFrom:
+            configMapKeyRef:
+              name: boardnext-config
+              key: OPENWEATHERMAP_API_KEY                  
+        # 2. dbms-secret에서 가져오는 값              
         - name: DBMS_PW
           valueFrom:
             secretKeyRef:
               name: dbms-secret
               key: DBMS_PW
+        # 3. openai-api-secret에서 가져오는 값         
+        - name: OPENAI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: openai-api-secret
+              key: OPENAI_API_KEY
+        # 4. pgvector-secret에서 가져오는 값        
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: pgvector-secret
+              key: POSTGRES_PASSWORD
+        # 5. SPRING.PROFILES.ACTIVE=prod 설정      
+        - name: SPRING_PROFILES_ACTIVE
+          value: "prod"  
+        # 6. GMail 앱 암호 설정      
+        - name: EMAIL_PW
+          valueFrom:
+            secretKeyRef:
+              name: gmail-secret
+              key: EMAIL_PW
+      imagePullSecrets:
+      - name: docker-secret                    
+
 ---
 apiVersion: v1
 kind: Service
@@ -63,3 +127,30 @@ spec:
   selector:
     app: boardrest
   type: NodePort
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: boardrest-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: boardrest-deployment
+  minReplicas: 1
+  maxReplicas: 1
+  # 스케일링 동작(속도)을 세밀하게 제어
+  behavior:
+    scaleUp:
+      policies:
+      # 1분에 최대 1개의 파드만 추가로 늘리도록 속도를 제한
+      - type: Pods
+        value: 1
+        periodSeconds: 60
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 50

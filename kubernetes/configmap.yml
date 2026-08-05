@@ -3,32 +3,7 @@ kind: ConfigMap
 metadata:
   name: boardnext-config
 data:
-  DBMS_URL: "jdbc:oracle:thin:@//192.168.0.10:1521/springpdb"
+  DBMS_URL: "jdbc:oracle:thin:@//192.168.0.112:1521/springpdb"
   DBMS_DRIVER: "oracle.jdbc.driver.OracleDriver"
   DBMS_USERNAME: "springdev"
-  google_secret: "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"
-  google_id: "711523001885-juqcv9l9a68vuln6fljl3on38hs6n9a7.apps.googleusercontent.com"
-  naver_secret: "hACwVsfU4M"
-  
-  # [Apache용] 리버스 프록시 설정 파일 (통째로 텍스트 저장)
-  httpd-vhosts.conf: |
-    <VirtualHost *:80>
-      ServerName www.boardnext.com
-      ServerAlias boardnext.com
-      DocumentRoot "/usr/local/apache2/htdocs"
-
-      <Directory "/usr/local/apache2/htdocs">
-         Options Indexes FollowSymLinks
-         AllowOverride None
-         Require all granted
-      </Directory>
-
-      RewriteEngine On
-
-      # 원래 요청이 HTTP였다면 HTTPS로 강제 이동
-      RewriteCond %{HTTP:X-Forwarded-Proto} !https [NC]
-      RewriteRule ^ https://www.boardnext.com%{REQUEST_URI} [R=301,L]
-
-      ErrorLog "logs/boardnext-error.log"
-      CustomLog "logs/boardnext-access.log" combined
-    </VirtualHost>
+  OPENWEATHERMAP_API_KEY: "45877e68514c84bcb209ac4c33b6b501344415941313a73c935327126f05dae0"

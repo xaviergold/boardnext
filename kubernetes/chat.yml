@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chat-deployment
+  labels:
+    app: chat
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: chat
+  template:
+    metadata:
+      labels:
+        app: chat
+    spec:
+      containers:
+      - name: chat-server
+        image: docker.io/redleon1/chat-boardnext:1.0
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 4000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: chat-service
+spec:
+  type: NodePort 
+  ports:
+  - port: 4000
+    targetPort: 4000
+    nodePort: 32400 
+  selector:
+    app: chat

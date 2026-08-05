@@ -2,6 +2,7 @@ package com.board.controller;
 
 import java.io.File;
 import java.net.URLEncoder;
+import java.nio.file.Files;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -9,27 +10,28 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-import org.apache.commons.io.FileUtils;
+//import org.apache.commons.io.FileUtils;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.domain.Sort.Direction;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.access.prepost.PreAuthorize;
-import org.springframework.web.bind.annotation.CrossOrigin;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
-import com.board.dto.BoardDTO;
-import com.board.dto.FileDTO;
-import com.board.dto.ReplyInterface;
+import com.board.async.BoardKafkaProducer;
+import com.board.dto.board.BoardDTO;
+import com.board.dto.board.FileDTO;
+import com.board.dto.board.ReplyInterface;
 import com.board.entity.BoardEntity;
 import com.board.entity.LikeEntity;
 import com.board.entity.repository.BoardRepository;
-import com.board.service.BoardService;
+import com.board.service.board.BoardService;
 import com.board.util.PageUtil;
 
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -45,7 +47,8 @@ import lombok.AllArgsConstructor;
 public class RESTBoardController {
 
 	private final BoardRepository boardRepository;
-	private final BoardService service;	
+	private final BoardService service;
+	private final BoardKafkaProducer kafkaProducer; // 게시글 작성/삭제 비동기 이벤트 발행
 	
 	//전체 게시물 목록 보기(테스트)
 	@GetMapping("/apitest/listAll")
@@ -127,15 +130,19 @@ public class RESTBoardController {
 		if(!p.exists()) p.mkdirs();
 		//운영체제에 따라 이미지가 저장될 디렉토리 구조 설정 종료
 		
-		Long seqno =0L;
+		Long seqno = 0L;
+		String jobId = null; // 비동기 등록 시에만 채워짐 - 클라이언트 폴링용
 		
-		//게시물 등록
+		//게시물 등록 - Kafka 비동기 처리
+		//Oracle 시퀀스에서 seqno를 미리 채번해서 이벤트에 실어 보내고,
+		//파일 업로드는 이 seqno를 그대로 사용해 동기로 즉시 처리 (파일은 비동기로 못 미룸)
+		//실제 게시글 row의 INSERT는 BoardEventConsumer가 비동기로 수행
 		if(kind.equals("I")) { 
-			service.write(board);
-			seqno = service.getMaxSeqno(board.getEmail().getEmail());
+			seqno = boardRepository.getNextSeqno();
+			jobId = kafkaProducer.publishBoardCreate(seqno, board.getEmail(), board.getWriter(), board.getTitle(), board.getContent());
 		}
 		
-		//게시물 수정
+		//게시물 수정 - 동기 유지 (수정 후 바로 조회되어야 하므로)
 		if(kind.equals("U")) { 
 			service.modify(board);
 			seqno = board.getSeqno();
@@ -165,7 +172,7 @@ public class RESTBoardController {
 				
 				FileDTO fileDTO = FileDTO.builder()
 								.seqno(seqno)
-								.email(board.getEmail().getEmail())
+								.email(board.getEmail())
 								.org_filename(org_filename)
 								.stored_filename(stored_filename)
 								.filesize(filesize)
@@ -176,7 +183,17 @@ public class RESTBoardController {
 			}
 		}	
 		
-		return ResponseEntity.ok().build();
+		// 등록(kind="I")인 경우 jobId를 응답에 포함 - 클라이언트가 이 jobId로 상태 폴링
+		// 수정(kind="U")인 경우 이미 동기로 끝났으므로 jobId 없이 즉시 완료 응답
+		Map<String, Object> result = new HashMap<>();
+		result.put("seqno", seqno);
+		if (jobId != null) {
+			result.put("jobId", jobId);
+			result.put("status", "PROCESSING");
+		} else {
+			result.put("status", "DONE");
+		}
+		return ResponseEntity.ok().body(result);
 	}
 	
 	//좋아요/싫어요 상태 보기
@@ -265,7 +282,7 @@ public class RESTBoardController {
 		FileDTO fileInfo = service.fileInfo(fileseqno);
 		String org_filename = fileInfo.getOrg_filename();
 		String stored_filename = fileInfo.getStored_filename();
-		byte fileByte[] = FileUtils.readFileToByteArray(new File(path+stored_filename));
+		byte[] fileByte = Files.readAllBytes(new File(path + stored_filename).toPath());
 		
 		//Content-Disposition 헤드를 구성하여 바이트 타입으로 변환된 Http Response 메세지를 전송 한다는 것은   
 		//이 파일을 다운받게끔 하는 것임
@@ -280,16 +297,68 @@ public class RESTBoardController {
 		return ResponseEntity.ok().build();
 	}
 	
-	//게시물 삭제
+	// 이미지 파일 조회 (챗봇에서 이미지 표시용)
+	@GetMapping("/api/member/image/{fileseqno}")
+	public ResponseEntity<?> viewImage(
+	        @PathVariable(name = "fileseqno") Long fileseqno) throws Exception {
+
+	    String os = System.getProperty("os.name").toLowerCase();
+	    String path = os.contains("win")
+	            ? "c:\\Repository\\file\\"
+	            : "/var/opt/Repository/file/";
+
+	    FileDTO fileInfo = service.fileInfo(fileseqno);
+	    
+	    // 1. DB에 파일 정보가 없거나, 저장된 파일명이 비어있으면 404 리턴
+	    if (fileInfo == null || fileInfo.getStored_filename() == null || fileInfo.getStored_filename().isBlank()) {
+	        return ResponseEntity.notFound().build();
+	    }
+
+	    String org_filename    = fileInfo.getOrg_filename();
+	    String stored_filename = fileInfo.getStored_filename();
+
+	    // 이미지 파일 형식 검증
+	    String lower = org_filename.toLowerCase();
+	    if (!lower.endsWith(".jpg") && !lower.endsWith(".jpeg")
+	            && !lower.endsWith(".png") && !lower.endsWith(".gif")
+	            && !lower.endsWith(".webp")) {
+	        return ResponseEntity.badRequest().body("이미지 파일이 아닙니다.");
+	    }
+
+	    // 2. 물리적 경로에 파일이 실제로 존재하는지 확인, 없으면 404 리턴
+	    File file = new File(path + stored_filename);
+	    if (!file.exists()) {
+	        return ResponseEntity.notFound().build();
+	    }
+
+	    // 파일 읽기 (이제 NoSuchFileException 걱정 없음)
+	    byte[] fileByte = Files.readAllBytes(file.toPath());
+
+	    // MimeType 결정
+	    String mimeType = lower.endsWith(".png") ? "image/png"
+	            : lower.endsWith(".gif") ? "image/gif"
+	            : lower.endsWith(".webp") ? "image/webp"
+	            : "image/jpeg";
+
+	    // HttpServletResponse를 직접 다루지 않고, ResponseEntity로 깔끔하게 리턴
+	    return ResponseEntity.ok()
+	            .header(HttpHeaders.CONTENT_TYPE, mimeType)
+	            .header(HttpHeaders.CONTENT_LENGTH, String.valueOf(fileByte.length))
+	            .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" + URLEncoder.encode(org_filename, "UTF-8") + "\"")
+	            .body(fileByte);
+	}
+	
+	//게시물 삭제 - Kafka 비동기 처리
+	//파일 정리(deleteFileList)와 게시글 삭제는 BoardEventConsumer가 비동기로 수행
 	@GetMapping("/api/board/delete")
 	public ResponseEntity<?> getDelete(@RequestParam("seqno") Long seqno) throws Exception {
 
-		Map<String, Object> data = new HashMap<>();
-		data.put("kind", "B");
-		data.put("seqno", seqno);		
-		service.deleteFileList(data);
-		service.delete(seqno);
-		return ResponseEntity.ok().build();
+		String jobId = kafkaProducer.publishBoardDelete(seqno);
+
+		Map<String, Object> result = new HashMap<>();
+		result.put("jobId", jobId);
+		result.put("status", "PROCESSING");
+		return ResponseEntity.ok().body(result);
 	}
 	
 	//댓글 처리	

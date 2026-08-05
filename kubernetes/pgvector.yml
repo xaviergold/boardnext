@@ -1,0 +1,112 @@
+# =============================================
+# PersistentVolume
+# =============================================
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pgvector-pv
+spec:
+  capacity:
+    storage: 1Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: manual
+  hostPath:
+    path: /var/opt/pgvector
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - xavier-virtual-machine
+
+---
+# =============================================
+# PersistentVolumeClaim
+# =============================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pgvector-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: manual
+  resources:
+    requests:
+      storage: 1Gi
+
+---
+# =============================================
+# Deployment
+# =============================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pgvector
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pgvector
+  template:
+    metadata:
+      labels:
+        app: pgvector
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: xavier-virtual-machine
+      tolerations:
+        - key: "node-role.kubernetes.io/control-plane"
+          operator: "Exists"
+          effect: "NoSchedule"
+      containers:
+        - name: pgvector
+          image: pgvector/pgvector:pg16
+          ports:
+            - containerPort: 5432
+              name: pgport
+          env:
+            - name: POSTGRES_DB
+              value: "vectordb"
+            - name: POSTGRES_USER
+              value: "postgres"
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: pgvector-secret
+                  key: POSTGRES_PASSWORD
+          volumeMounts:
+            - name: pgvector-storage
+              mountPath: /var/lib/postgresql/data
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+      volumes:
+        - name: pgvector-storage
+          persistentVolumeClaim:
+            claimName: pgvector-pvc
+
+---
+# =============================================
+# Service (NodePort)
+# =============================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: pgvector-service
+spec:
+  type: NodePort
+  ports:
+    - port: 5432
+      targetPort: 5432
+      nodePort: 30432   # 외부 접근용 포트 고정
+  selector:
+    app: pgvector
